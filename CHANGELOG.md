@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Messages API** (`POST /v1/messages`): send any text to a WhatsApp number from any project with its secret key. Messages are logged in the conversation, so a chatbot project answers replies with context. New `message.sent` webhook event and a per-recipient limit (`SEND_PER_RECIPIENT_PER_MIN`, default 5)
+- Dashboard docs: "Send messages" section with code samples and a Try it box
+- **Sender branding:** set the linked number's WhatsApp display name and logo from the project's WhatsApp tab (`GET/POST /v1/sessions/:id/profile`), with a preview of how OTPs and messages look to recipients
+
+## [2.0.0] - 2026-11-10
+
+### Added
+- **Projects:** many WhatsApp numbers per server, each owned by one user and set to *OTP codes* or *AI chatbot*
+- **OTP API** (`/v1/otp/send`, `/v1/otp/verify`): hashed single-use codes, expiry, lockout, resend cooldown, hourly cap, templates, delivery status
+- **AI chatbot:** Gemini with instructions and knowledge base, optional answer URL, playground, conversation log, per-project model and encrypted key
+- **Chat API** (`/v1/chat`) and **website widget** (`/widget.js`) with publishable keys and allowed origins
+- Signed **webhooks** with retries, delivery logs and SSRF protection
+- **Sign-in with Tausi Auth** (cookie-mode proxy); gateway data in **Supabase** (`supabase/migrations/`)
+- **Dashboard redesign:** projects grid, per-project pages with stats and charts, API keys, webhooks, docs with code samples
+- **Deployment:** Dockerfile, docker-compose, `/healthz`, stdout logging, graceful shutdown, `WHATSAPP_AUTH_DIR`
+
+### Changed
+- The Kamila bot uses Gemini instead of Ollama; its persona moved from `Modelfile` to `prompts/kamila.md`
+- `server.js` split into `gateway/` and `bot/` modules
+- The Kamila bot pages require an owner sign-in (or `API_KEY`)
+- AI errors are no longer sent to the contact
+
+### Removed
+- Broadcast messaging and AI message "enhance"
+- Ollama, the disabled whitelist/blacklist code, `REQUIRE_AUTH`, unused `/api` endpoints, `qrcode-terminal`
+- Planning and review documents (`docs/`, `CHECKPOINT.md`)
+
+### Fixed
+- Dashboard writes were rejected on non-localhost domains by an old origin check
+- DRAFT mode no longer sends a "Draft saved" preview to the contact
+- Server crash when a bot reply failed
+
 ## [1.0.0] - 2026-09-03
 
 ### Added
