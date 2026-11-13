@@ -39,6 +39,22 @@
   const modeBadge = (m) => `<span class="gw-mode gw-mode-${m}">${MODE_LABEL[m] || m}</span>`;
   const avatar = (s, size = '') => `<span class="gw-avatar gw-avatar-${s.mode} ${size}" aria-hidden="true">${esc((s.name || '?').trim().charAt(0).toUpperCase())}</span>`;
 
+  // Black or white text for a brand colour, whichever has more contrast (WCAG).
+  function inkFor(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+    if (!m) return '#fff';
+    const n = parseInt(m[1], 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+    const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 ? '#fff' : '#111';
+  }
+  const emptyState = (title, text = '', action = '') => `<div class="pp-empty"><div class="pp-empty-title">${title}</div>${text ? `<p class="gw-muted gw-small">${text}</p>` : ''}${action}</div>`;
+  const ATTENTION = { SCAN_QR: 'Scan the QR code to connect', STOPPED: 'Stopped · open to start', FAILED: 'Failed to start · open to retry', STARTING: 'Starting WhatsApp…' };
+  const ICONS = {
+    otp: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    chatbot: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  };
+
   function copy(text) {
     navigator.clipboard?.writeText(text).then(() => toast('Copied to clipboard', 'success'), () => toast('Copy failed', 'error'));
   }
@@ -170,13 +186,14 @@
     const mount = $('#view-mount');
     mount.innerHTML = `
       <header class="pg-head">
-        <div><h1 class="pg-title">Projects</h1><p class="pg-sub">WhatsApp numbers that send OTP codes or answer customers with AI.</p></div>
+        <div><h1 class="pg-title">Projects</h1><p class="pg-sub">WhatsApp numbers that send messages and OTP codes, or answer customers with AI.</p></div>
       </header>
+      <div class="pj-summary" id="pj-summary" aria-label="Today across all projects"></div>
       <div class="gw-toolbar">
         <div class="gw-search"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
           <input class="input" id="pj-search" placeholder="Search projects…" autocomplete="off"></div>
         <div class="gw-seg" id="pj-filter" role="radiogroup" aria-label="Filter by type">
-          <button type="button" data-f="all" aria-checked="true">All</button><button type="button" data-f="otp" aria-checked="false">OTP</button><button type="button" data-f="chatbot" aria-checked="false">AI chatbot</button>
+          <button type="button" data-f="all" aria-checked="true">All <span class="gw-seg-n" data-n="all"></span></button><button type="button" data-f="otp" aria-checked="false">OTP <span class="gw-seg-n" data-n="otp"></span></button><button type="button" data-f="chatbot" aria-checked="false">AI chatbot <span class="gw-seg-n" data-n="chatbot"></span></button>
         </div>
         <span class="gw-grow"></span>
         <span class="gw-muted gw-small" id="pj-quota"></span>
@@ -193,14 +210,26 @@
       const own = projects.filter((x) => !x.system).length;
       $('#pj-quota').textContent = `${own} of ${Auth.limits.sessions} projects`;
       const grid = $('#pj-grid');
+      $$('#pj-filter [data-n]').forEach((el) => { el.textContent = el.dataset.n === 'all' ? projects.length : projects.filter((x) => x.mode === el.dataset.n).length; });
+      const sum = $('#pj-summary');
+      if (sum) {
+        const live = projects.filter((x) => x.status === 'WORKING').length;
+        const attn = projects.length - live;
+        const total = (k) => projects.reduce((a, x) => a + (x[k] || 0), 0);
+        sum.innerHTML = projects.length ? `
+          <div class="pj-sum"><div class="stat-label">Connected</div><div class="pj-sum-v">${live}<span> / ${projects.length}</span></div></div>
+          <div class="pj-sum"><div class="stat-label">Codes sent today</div><div class="pj-sum-v">${fmt(total('sentToday'))}</div></div>
+          <div class="pj-sum"><div class="stat-label">Messages today</div><div class="pj-sum-v">${fmt(total('receivedToday') + total('repliedToday'))}</div></div>
+          <div class="pj-sum${attn ? ' warn' : ''}"><div class="stat-label">Need attention</div><div class="pj-sum-v">${attn}</div></div>` : '';
+      }
       if (!projects.length) {
         grid.innerHTML = `<div class="pj-empty card"><div class="pj-empty-icon">＋</div><h3>Create your first project</h3>
-          <p class="gw-muted">Link a WhatsApp number, then choose whether it sends OTP codes from your app or answers customers with an AI chatbot.</p>
+          <p class="gw-muted">Link a WhatsApp number, then send OTP codes and messages from your app, or let an AI chatbot answer your customers.</p>
           <button class="btn btn-primary" data-new>Add new project</button></div>`;
         $('[data-new]', grid).onclick = newProjectModal;
         return;
       }
-      if (!list.length) { grid.innerHTML = '<div class="gw-muted pj-none">No projects match.</div>'; return; }
+      if (!list.length) { grid.innerHTML = `<div class="pj-none">${emptyState('No projects match', 'Try a different search or filter.')}</div>`; return; }
       grid.innerHTML = list.map((p) => {
         const series = spark[p.id] || [];
         const values = series.map((d) => (p.mode === 'chatbot' ? d.messages : d.otp));
@@ -208,9 +237,9 @@
         return `<a class="pj-card card" href="#/projects/${encodeURIComponent(p.id)}" data-id="${esc(p.id)}">
           <div class="pj-card-top">${avatar(p)}<div class="gw-grow pj-card-id"><div class="pj-card-name">${esc(p.name)}</div>
             <div class="pj-card-sub">${p.phone ? '+' + esc(p.phone) : 'Not linked'}</div></div>
-            <span class="pj-dot gw-${p.status}" title="${esc(STATUS_LABEL[p.status] || p.status)}"></span></div>
+            <span class="pj-dot gw-${p.status}" role="img" aria-label="${esc(STATUS_LABEL[p.status] || p.status)}" title="${esc(STATUS_LABEL[p.status] || p.status)}"></span></div>
           <div class="pj-card-chart">${values.length ? sparkline(values, p.mode === 'chatbot' ? 'Messages' : 'Codes sent') : ''}</div>
-          <div class="pj-card-foot">${modeBadge(p.mode)}<span class="gw-muted">${metric}</span></div>
+          <div class="pj-card-foot">${modeBadge(p.mode)}${p.status !== 'WORKING' && ATTENTION[p.status] ? `<span class="pj-attn gw-${p.status}">${ATTENTION[p.status]}</span>` : `<span class="gw-muted">${metric}</span>`}</div>
         </a>`;
       }).join('');
     };
@@ -238,18 +267,19 @@
   function newProjectModal() {
     const m = openModal(`
       <form data-f="form">
-        <div class="gw-modal-head"><h3>New project</h3><p class="gw-muted gw-small">A project is one WhatsApp number. You'll scan a QR code next.</p></div>
+        <div class="gw-modal-head"><h3>New project</h3><p class="gw-muted gw-small">A project is one WhatsApp number. Next you'll scan a QR code with the phone for that number.</p></div>
         <div class="gw-modal-body">
           <label class="gw-field">Project name<input class="input" name="name" maxlength="60" required placeholder="e.g. Duka Online"></label>
           <div class="gw-field-label">What should this number do?</div>
           <div class="gw-choice">
             <label class="gw-choice-card"><input type="radio" name="mode" value="otp" checked>
-              <span class="gw-choice-title">OTP codes</span>
+              <span class="gw-choice-title">${ICONS.otp} OTP codes</span>
               <span class="gw-choice-desc">Your app sends verification codes through the API. Incoming messages get no reply.</span></label>
             <label class="gw-choice-card"><input type="radio" name="mode" value="chatbot">
-              <span class="gw-choice-title">AI chatbot</span>
+              <span class="gw-choice-title">${ICONS.chatbot} AI chatbot</span>
               <span class="gw-choice-desc">Answers on WhatsApp, your website widget and the Chat API, using your knowledge base.</span></label>
           </div>
+          <p class="gw-muted gw-small">Both types can also send messages through the Messages API. You can change the type later in Settings.</p>
         </div>
         <div class="gw-modal-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Create project</button></div>
       </form>`);
@@ -261,7 +291,7 @@
         m.close();
         projects.push(created);
         location.hash = `#/projects/${encodeURIComponent(created.id)}/connect`;
-        if (created.apiKey) setTimeout(() => revealKeyModal('Your secret key', created.apiKey, 'Use this server-side key for the OTP and Chat APIs. Copy it now. It\'s stored hashed and won\'t be shown again.'), 300);
+        if (created.apiKey) setTimeout(() => revealKeyModal('Your secret key', created.apiKey, 'Use this server-side key for the Messages, OTP and Chat APIs. Copy it now. It\'s stored hashed and won\'t be shown again.'), 300);
       });
     };
   }
@@ -301,15 +331,22 @@
         ${avatar(s, 'lg')}
         <div class="gw-grow">
           <div class="pp-title-row"><h1 class="pg-title" data-f="title">${esc(s.name)}</h1>${modeBadge(s.mode)}<span data-f="status">${statusPill(s)}</span></div>
-          <div class="pg-sub"><span data-f="identity">${s.phone ? '+' + esc(s.phone) + (s.pushName ? ' · ' + esc(s.pushName) : '') : 'No WhatsApp number linked'}</span> · <code class="pp-id" title="Project ID">${esc(s.id)}</code></div>
+          <div class="pg-sub"><span data-f="identity">${s.phone ? '+' + esc(s.phone) + (s.pushName ? ' · ' + esc(s.pushName) : '') : 'No WhatsApp number linked'}</span> · <button type="button" class="pp-id" data-f="copy-id" title="Copy project ID" aria-label="Copy project ID ${esc(s.id)}">${esc(s.id)}</button></div>
         </div>
         <div class="pp-actions" data-f="actions"></div>
       </header>
-      <nav class="pp-tabs" aria-label="Project">${tabs.map(([k, l]) => `<a href="#/projects/${encodeURIComponent(id)}/${k}" class="${k === tab ? 'active' : ''}">${l}</a>`).join('')}</nav>
+      <nav class="pp-tabs" aria-label="Project">${tabs.map(([k, l]) => `<a href="#/projects/${encodeURIComponent(id)}/${k}" data-tab="${k}" class="${k === tab ? 'active' : ''}"${k === tab ? ' aria-current="page"' : ''}>${l}${k === 'connect' ? '<span class="pp-tab-dot" title="Not connected"></span>' : ''}</a>`).join('')}</nav>
       <div class="pp-body" data-f="body"></div>`;
     page.root = $('[data-f=body]', mount);
+    $('[data-f=copy-id]', mount).onclick = () => copy(s.id);
+    markTabs(s);
     drawActions(s);
     await renderTab(s, tab);
+  }
+
+  // Flags the WhatsApp tab while the number isn't connected.
+  function markTabs(s) {
+    $('.pp-tabs [data-tab=connect]')?.classList.toggle('needs', s.status !== 'WORKING');
   }
 
   function drawActions(s) {
@@ -333,6 +370,7 @@
     if (st) st.innerHTML = statusPill(full);
     const idn = $('[data-f=identity]');
     if (idn && 'phone' in s) idn.textContent = full.phone ? `+${full.phone}${full.pushName ? ' · ' + full.pushName : ''}` : 'No WhatsApp number linked';
+    markTabs(full);
     drawActions(full);
     if (page.tab === 'connect' || page.tab === 'overview') page.reloadConn?.();
   }
@@ -375,14 +413,14 @@
 
   // ── WhatsApp profile: the name and photo recipients see ──
   const PROFILE_NAME_MAX = 25;
-  function senderPreview(s, prof, name) {
+  function senderPreview(s, prof, name, text) {
     const shown = name || prof?.name || '';
     const pic = prof?.picture
       ? `<img class="wa-pic" src="${esc(prof.picture)}" alt="" referrerpolicy="no-referrer">`
       : `<span class="wa-pic wa-pic-empty">${esc((shown || s.name || '?').trim().charAt(0).toUpperCase())}</span>`;
-    const sample = s.mode === 'chatbot' ? 'Hi! How can we help you today?' : (s.otpTemplate || '').replace(/\{code\}/g, '482913').replace(/\{brand\}/g, s.name).replace(/\{minutes\}/g, '5');
+    const sample = text != null ? text : s.mode === 'chatbot' ? 'Hi! How can we help you today?' : (s.otpTemplate || '').replace(/\{code\}/g, '482913').replace(/\{brand\}/g, s.name).replace(/\{minutes\}/g, '5');
     return `<div class="wa-phone" aria-label="Preview of what recipients see">
-      <div class="wa-head">${pic}<div class="wa-who"><div class="wa-num">+${esc(prof?.phone || s.phone || '')}</div>${shown ? `<div class="wa-name">~ ${esc(shown)}</div>` : ''}</div></div>
+      <div class="wa-head">${pic}<div class="wa-who"><div class="wa-num">${prof?.phone || s.phone ? '+' + esc(prof?.phone || s.phone) : 'Your WhatsApp number'}</div>${shown ? `<div class="wa-name">~ ${esc(shown)}</div>` : ''}</div></div>
       <div class="wa-body"><div class="msg-bubble msg-ai">${esc(sample).replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>').replace(/_([^_\n]+)_/g, '<em>$1</em>').replace(/\n/g, '<br>')}</div></div>
     </div>`;
   }
@@ -467,6 +505,43 @@
     };
   }
 
+  // ── Setup checklist (Overview) ──
+  async function renderSetup(box, s) {
+    if (!box || s.mode === 'kamila') return;
+    const hideKey = `kamila_setup_hidden_${s.id}`;
+    try { if (localStorage.getItem(hideKey)) return; } catch {}
+    const chat = s.mode === 'chatbot';
+    let active = false;
+    try {
+      const rows = chat ? await gw('GET', `/sessions/${s.id}/messages?limit=1`) : await gw('GET', '/otp?limit=1', undefined, s.id);
+      active = rows.length > 0;
+    } catch {}
+    if (!box.isConnected) return;
+    const base = `#/projects/${encodeURIComponent(s.id)}`;
+    const link = { done: s.status === 'WORKING' || !!s.phone, title: 'Link a WhatsApp number', text: 'Scan a QR code with the phone for this number.', href: `${base}/connect`, cta: 'Link number' };
+    const steps = chat ? [
+      link,
+      { done: !!(s.chatbot.instructionsChars || s.chatbot.knowledgeChars || s.chatbot.answerUrl), title: 'Teach the bot about your business', text: 'Add instructions and a knowledge base: products, prices, hours, delivery, FAQs.', href: `${base}/knowledge`, cta: 'Add knowledge' },
+      { done: !!s.publishableKey && (s.allowedOrigins || []).length > 0, title: 'Add the chat to your website', text: 'Optional. A chat bubble answered by the same bot.', href: `${base}/keys`, cta: 'Set up widget' },
+      { done: active, title: 'Get your first conversation', text: 'Message the number on WhatsApp, or try the Playground first.', href: `${base}/test`, cta: 'Open Playground' },
+    ] : [
+      link,
+      { done: !!s.pushName && s.pushName.trim().toLowerCase() === s.name.trim().toLowerCase(), title: 'Show your business name', text: 'Set the name and logo people see when your codes arrive.', href: `${base}/connect`, cta: 'Brand number' },
+      { done: active, title: 'Send your first code', text: 'Call the OTP API from your backend with your secret key.', href: `${base}/keys`, cta: 'See the code' },
+    ];
+    const n = steps.filter((x) => x.done).length;
+    if (n === steps.length) return;
+    box.innerHTML = `
+      <div class="pp-panel-head"><div><h2>Get started</h2><p class="gw-muted gw-small">${n} of ${steps.length} done</p></div><button class="btn btn-sm" data-f="hide">Hide</button></div>
+      <div class="pp-progress" role="progressbar" aria-valuemin="0" aria-valuemax="${steps.length}" aria-valuenow="${n}" aria-label="Setup progress"><span style="width:${Math.round((n / steps.length) * 100)}%"></span></div>
+      <ol class="pp-steps">${steps.map((x, i) => `<li class="${x.done ? 'done' : ''}">
+        <span class="pp-step-mark" aria-hidden="true">${x.done ? '✓' : i + 1}</span>
+        <div class="gw-grow"><div class="pp-step-title">${x.title}${x.done ? '<span class="sr-only"> (done)</span>' : ''}</div><div class="gw-muted gw-small">${x.text}</div></div>
+        ${x.done ? '' : `<a class="btn btn-sm" href="${x.href}">${x.cta}</a>`}</li>`).join('')}</ol>`;
+    box.classList.remove('hidden');
+    $('[data-f=hide]', box).onclick = () => { try { localStorage.setItem(hideKey, '1'); } catch {} box.remove(); };
+  }
+
   // ── Chart (Chart.js) ──
   const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   function drawChart(canvas, labels, seriesDefs) {
@@ -540,6 +615,7 @@
       const chat = s.mode === 'chatbot';
       body.innerHTML = `
         <div class="pp-grid">
+          <section class="card pp-panel pp-span2 pp-setup hidden" data-f="setup"></section>
           <section class="card pp-panel pp-span2">
             <div class="pp-panel-head"><h2>Activity</h2>
               <div class="gw-seg gw-seg-sm" data-f="range" role="radiogroup" aria-label="Range">
@@ -557,6 +633,7 @@
           <section class="card pp-panel pp-span2"><div class="pp-panel-head"><h2>Recent ${chat ? 'messages' : 'codes'}</h2><a class="gw-link" href="#/projects/${encodeURIComponent(id)}/${chat ? 'conversations' : 'activity'}">View all</a></div><div data-f="recent" class="gw-muted gw-small">Loading…</div></section>
         </div>`;
       wireCode(body);
+      renderSetup($('[data-f=setup]', body), s);
       const connBox = $('[data-f=conn]', body);
       page.reloadConn = () => { const cur = current(); if (cur && connBox.isConnected) { connBox.innerHTML = connectionHtml(cur, false); wireConnection(connBox, cur); } };
       page.reloadConn();
@@ -589,10 +666,10 @@
         try {
           if (chat) {
             const rows = await gw('GET', `/sessions/${id}/messages?limit=8`);
-            box.innerHTML = rows.length ? `<ul class="pp-feed">${rows.map((m) => `<li><span class="pp-feed-who">${m.role === 'user' ? esc(chatLabel(m.chat_id)) : 'Bot'}</span><span class="pp-feed-text">${esc(m.text.slice(0, 140))}</span><span class="gw-muted">${timeAgo(m.created_at)}</span></li>`).join('')}</ul>` : 'No messages yet.';
+            box.innerHTML = rows.length ? `<ul class="pp-feed">${rows.map((m) => `<li><span class="pp-feed-who">${m.role === 'user' ? esc(chatLabel(m.chat_id)) : 'Bot'}</span><span class="pp-feed-text">${esc(m.text.slice(0, 140))}</span><span class="gw-muted">${timeAgo(m.created_at)}</span></li>`).join('')}</ul>` : emptyState('No messages yet', 'Messages from WhatsApp, the website widget and the Chat API show up here.');
           } else {
             const rows = await gw('GET', '/otp?limit=8', undefined, id);
-            box.innerHTML = rows.length ? `<ul class="pp-feed">${rows.map((o) => `<li><span class="pp-feed-who">+${esc(maskPhone(o.phone))}</span><span class="pp-feed-text"><span class="gw-pill ${OTP_STATUS_CLS[o.status] || ''}">${esc(o.status)}</span></span><span class="gw-muted">${timeAgo(o.created_at)}</span></li>`).join('')}</ul>` : 'No codes sent yet.';
+            box.innerHTML = rows.length ? `<ul class="pp-feed">${rows.map((o) => `<li><span class="pp-feed-who">+${esc(maskPhone(o.phone))}</span><span class="pp-feed-text"><span class="gw-pill ${OTP_STATUS_CLS[o.status] || ''}">${esc(o.status)}</span></span><span class="gw-muted">${timeAgo(o.created_at)}</span></li>`).join('')}</ul>` : emptyState('No codes sent yet', 'Codes you send through the OTP API show up here with their delivery status.');
           }
         } catch (err) { box.textContent = err.message; }
       };
@@ -620,23 +697,47 @@
     }
 
     if (tab === 'message') {
+      const VARS = [['{code}', 'Code'], ['{brand}', 'Business name'], ['{minutes}', 'Minutes left']];
       body.innerHTML = `
-        <section class="card pp-panel pp-narrow">
+        <section class="card pp-panel">
           <div class="pp-panel-head"><h2>OTP message</h2></div>
-          <p class="gw-muted gw-small">The only text this number ever sends. Must include <code>{code}</code>. Optional: <code>{brand}</code> (project name) and <code>{minutes}</code> (expiry). WhatsApp formatting like <code>*bold*</code> works.</p>
-          <textarea class="input" data-f="tpl" rows="4" maxlength="500">${esc(s.otpTemplate)}</textarea>
-          <div class="gw-preview"><div class="gw-label">Preview</div><div class="msg-bubble msg-ai" data-f="tpl-preview"></div></div>
+          <p class="gw-muted gw-small">The text sent with every code. Click a value to insert it. WhatsApp formatting like <code>*bold*</code> and <code>_italic_</code> works.</p>
+          <div class="pp-tpl">
+            <div class="pp-tpl-edit">
+              <div class="gw-row pp-chips">${VARS.map(([v, l]) => `<button type="button" class="pp-chip" data-var="${v}"><code>${v}</code> ${l}</button>`).join('')}</div>
+              <textarea class="input" data-f="tpl" rows="6" maxlength="500" aria-describedby="tpl-help">${esc(s.otpTemplate)}</textarea>
+              <div class="gw-row gw-small" id="tpl-help"><span class="gw-error" data-f="tpl-err" role="alert"></span><span class="gw-grow"></span><span class="gw-muted" data-f="tpl-n"></span></div>
+            </div>
+            <div><div class="gw-label">What people see</div><div data-f="tpl-preview"></div></div>
+          </div>
+          <p class="gw-muted gw-small pp-note">To show your business name and logo instead of a bare number, set them on the <a class="gw-link" href="#/projects/${encodeURIComponent(s.id)}/connect">WhatsApp</a> tab.</p>
           <div class="pp-foot"><button class="btn btn-sm" data-f="reset">Reset to default</button><button class="btn btn-primary btn-sm" data-f="save">Save</button></div>
-          <p class="gw-muted gw-small pp-note">To show your business name and logo instead of a bare number, set them on the <a class="gw-link" href="#/projects/${esc(s.id)}/connect">WhatsApp</a> tab.</p>
         </section>`;
       const ta = $('[data-f=tpl]', body);
+      const saveBtn = $('[data-f=save]', body);
+      let prof = { name: s.pushName, phone: s.phone, picture: null };
       const preview = () => {
-        const t = ta.value.replace(/\{code\}/g, '482913').replace(/\{brand\}/g, s.name).replace(/\{minutes\}/g, '5');
-        $('[data-f=tpl-preview]', body).innerHTML = esc(t).replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>').replace(/_([^_\n]+)_/g, '<em>$1</em>').replace(/\n/g, '<br>');
+        const v = ta.value;
+        const bad = [...v.matchAll(/\{([^{}]*)\}/g)].map((m) => m[0]).filter((x) => !VARS.some(([k]) => k === x));
+        const err = !v.trim() ? 'The message cannot be empty.' : !v.includes('{code}') ? 'Add {code} so the code is in the message.' : bad.length ? `Unknown value ${bad[0]}. Use {code}, {brand} or {minutes}.` : '';
+        $('[data-f=tpl-err]', body).textContent = err;
+        $('[data-f=tpl-n]', body).textContent = `${v.length} / 500`;
+        saveBtn.disabled = !!err;
+        const t = v.replace(/\{code\}/g, '482913').replace(/\{brand\}/g, s.name).replace(/\{minutes\}/g, '5');
+        $('[data-f=tpl-preview]', body).innerHTML = senderPreview(s, prof, null, t);
       };
       ta.oninput = preview; preview();
-      $('[data-f=save]', body).onclick = (e) => busy(e.target, () => save({ otp_template: ta.value.trim() || null }, 'Template saved'));
-      $('[data-f=reset]', body).onclick = (e) => busy(e.target, async () => { const i = await save({ otp_template: null }, 'Template reset'); ta.value = i.otpTemplate; preview(); });
+      if (s.status === 'WORKING') gw('GET', `/sessions/${s.id}/profile`).then((r) => { prof = r; if (ta.isConnected) preview(); }).catch(() => {});
+      $$('[data-var]', body).forEach((b) => {
+        b.onclick = () => {
+          const st = ta.selectionStart ?? ta.value.length;
+          ta.setRangeText(b.dataset.var, st, ta.selectionEnd ?? st, 'end');
+          ta.focus();
+          preview();
+        };
+      });
+      saveBtn.onclick = (e) => busy(e.target, () => save({ otp_template: ta.value.trim() || null }, 'Message saved'));
+      $('[data-f=reset]', body).onclick = (e) => busy(e.target, async () => { const i = await save({ otp_template: null }, 'Message reset'); ta.value = i.otpTemplate; preview(); });
       return;
     }
 
@@ -740,10 +841,17 @@
       const draw = () => {
         chat.innerHTML = page.testHistory.length
           ? page.testHistory.map((h) => `<div class="msg-bubble ${h.role === 'user' ? 'msg-user' : 'msg-ai'}${h.error ? ' gw-bubble-error' : ''}">${esc(h.text).replace(/\n/g, '<br>')}${h.source ? `<div class="msg-meta">${h.source === 'answer_url' ? 'from your API' : 'Gemini'}</div>` : ''}</div>`).join('')
-          : '<div class="gw-muted gw-small gw-chat-empty">Send a message to start.</div>';
+          : `<div class="gw-chat-empty"><div class="gw-muted gw-small">Ask what a customer would ask, for example:</div>
+              <div class="pp-chips">${['What do you sell?', 'What are your opening hours?', 'Do you deliver?', 'How can I pay?'].map((q) => `<button type="button" class="pp-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>`;
         chat.scrollTop = chat.scrollHeight;
       };
       draw();
+      chat.onclick = (e) => {
+        const q = e.target.closest('[data-q]');
+        if (!q) return;
+        $('[data-f=msg]', body).value = q.dataset.q;
+        $('[data-f=form]', body).requestSubmit();
+      };
       $('[data-f=reset]', body).onclick = () => { page.testHistory = []; draw(); };
       $('[data-f=form]', body).onsubmit = async (e) => {
         e.preventDefault();
@@ -775,7 +883,7 @@
         const box = $('[data-f=list]', body);
         try {
           const rows = await gw('GET', `/sessions/${id}/messages?limit=200`);
-          if (!rows.length) { box.innerHTML = 'No messages yet. Conversations from WhatsApp, the website widget, the Chat API and messages you send appear here.'; return; }
+          if (!rows.length) { box.innerHTML = emptyState('No conversations yet', 'Chats from WhatsApp, the website widget, the Chat API and messages you send show up here.', `<a class="btn btn-sm" href="#/projects/${encodeURIComponent(id)}/test">Try the Playground</a>`); return; }
           const threads = new Map();
           for (const m of rows) { if (!threads.has(m.chat_id)) threads.set(m.chat_id, []); threads.get(m.chat_id).push(m); }
           box.innerHTML = `<div class="pp-threads">${[...threads.entries()].map(([chatId, msgs]) => `
@@ -799,7 +907,7 @@
         try {
           const rows = await gw('GET', '/otp?limit=50', undefined, id);
           box.innerHTML = rows.length ? `<table class="eval-table"><thead><tr><th>Phone</th><th>Status</th><th>Attempts</th><th>Expires</th><th>Created</th></tr></thead><tbody>${
-            rows.map((o) => `<tr><td class="mono">+${esc(maskPhone(o.phone))}</td><td><span class="gw-pill ${OTP_STATUS_CLS[o.status] || ''}">${esc(o.status)}</span></td><td>${o.attempts}/${o.max_attempts}</td><td class="gw-muted">${new Date(o.expires_at).toLocaleTimeString()}</td><td class="gw-muted">${timeAgo(o.created_at)}</td></tr>`).join('')}</tbody></table>` : 'No codes sent yet.';
+            rows.map((o) => `<tr><td class="mono">+${esc(maskPhone(o.phone))}</td><td><span class="gw-pill ${OTP_STATUS_CLS[o.status] || ''}">${esc(o.status)}</span></td><td>${o.attempts}/${o.max_attempts}</td><td class="gw-muted">${new Date(o.expires_at).toLocaleTimeString()}</td><td class="gw-muted">${timeAgo(o.created_at)}</td></tr>`).join('')}</tbody></table>` : emptyState('No codes sent yet', 'Send one from the Docs page or your backend to see it here.', '<a class="btn btn-sm" href="#/api">Open Docs</a>');
         } catch (err) { box.textContent = err.message; }
       };
       $('[data-f=r1]', body).onclick = load;
@@ -874,11 +982,12 @@
         };
         const prev = () => {
           const c = $('[data-f=w-color]', body).value;
+          const k = `background:${esc(c)};color:${inkFor(c)}`;
           $('[data-f=w-color-v]', body).textContent = c;
-          $('[data-f=w-preview]', body).innerHTML = `<div class="wp-panel"><div class="wp-head" style="background:${esc(c)}"><span class="wp-av">${esc(($('[data-f=w-title]', body).value || 'K').charAt(0).toUpperCase())}</span><span>${esc($('[data-f=w-title]', body).value)}</span></div>
-            <div class="wp-body"><div class="wp-msg">${esc($('[data-f=w-greet]', body).value)}</div><div class="wp-msg wp-me" style="background:${esc(c)}">Do you deliver to Mbezi?</div></div>
-            <div class="wp-input"><span>Type your message…</span><span class="wp-send" style="background:${esc(c)}">Send</span></div></div>
-            <div class="wp-bubble" style="background:${esc(c)}"></div>`;
+          $('[data-f=w-preview]', body).innerHTML = `<div class="wp-panel"><div class="wp-head" style="${k}"><span class="wp-av">${esc(($('[data-f=w-title]', body).value || 'K').charAt(0).toUpperCase())}</span><span>${esc($('[data-f=w-title]', body).value)}</span></div>
+            <div class="wp-body"><div class="wp-msg">${esc($('[data-f=w-greet]', body).value)}</div><div class="wp-msg wp-me" style="${k}">Do you deliver to Mbezi?</div></div>
+            <div class="wp-input"><span>Type your message…</span><span class="wp-send" style="${k}">${'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>'}</span></div></div>
+            <div class="wp-bubble" style="${k}">${ICONS.chatbot}</div>`;
         };
         ['w-title', 'w-greet', 'w-color'].forEach((f) => { $(`[data-f=${f}]`, body).oninput = prev; });
         prev();
@@ -922,7 +1031,7 @@
         try {
           const logs = await gw('GET', `/sessions/${id}/webhook/logs?limit=30`);
           box.innerHTML = logs.length ? `<table class="eval-table"><thead><tr><th>Event</th><th>Result</th><th>Attempt</th><th>Duration</th><th>When</th></tr></thead><tbody>${
-            logs.map((l) => `<tr><td><code>${esc(l.event)}</code></td><td class="${l.error ? 'sentiment-neg' : 'sentiment-pos'}">${l.error ? esc(l.error) : `HTTP ${l.status_code}`}</td><td>${l.attempt}</td><td>${l.duration_ms}ms</td><td class="gw-muted">${timeAgo(l.created_at)}</td></tr>`).join('')}</tbody></table>` : 'No deliveries yet.';
+            logs.map((l) => `<tr><td><code>${esc(l.event)}</code></td><td class="${l.error ? 'sentiment-neg' : 'sentiment-pos'}">${l.error ? esc(l.error) : `HTTP ${l.status_code}`}</td><td>${l.attempt}</td><td>${l.duration_ms}ms</td><td class="gw-muted">${timeAgo(l.created_at)}</td></tr>`).join('')}</tbody></table>` : emptyState('No deliveries yet', 'Save an endpoint and click “Send test event” to check it works.');
         } catch (err) { box.textContent = err.message; }
       };
       $('[data-f=test]', body).onclick = (e) => busy(e.target, async () => {
