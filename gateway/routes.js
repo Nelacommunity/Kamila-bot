@@ -22,7 +22,7 @@ const TEMPLATE_RULES = 'otp_template must contain {code}, be at most 500 charact
 export function createGatewayRouter({
   repo, manager, webhooks, auth, logger, pepper, chatbot, gemini, sealer,
   maxSessions = 10, maxSessionsPerUser = 2, rateLimitPerMin = 30, allowPrivateWebhooks = false,
-  chatPerMin = 60, widgetPerDay = 1000, sendPerRecipientPerMin = 5,
+  chatPerMin = 60, widgetPerDay = 1000, sendPerRecipientPerMin = 5, failedOtpTtlMin = 10,
   otp: otpOpts = {},
 }) {
   const router = express.Router();
@@ -31,11 +31,18 @@ export function createGatewayRouter({
   const hashCode = (id, code) => crypto.createHmac('sha256', pepper).update(`${id}:${code}`).digest('hex');
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-  // Expire stale codes and purge week-old rows.
+  // Every 30s: fail codes that never left, expire stale ones, and delete
+  // failed codes 10 minutes after they failed. Week-old rows are purged hourly.
+  const emitOtp = (r, status) => manager.emit('otp', { id: r.id, session: r.session_id, ownerId: manager.rt(r.session_id).ownerId ?? null, status });
   setInterval(async () => {
     try {
-      for (const r of await repo.expireOtps()) manager.emit('otp', { id: r.id, session: r.session_id, ownerId: manager.rt(r.session_id).ownerId ?? null, status: 'EXPIRED' });
-    } catch (e) { logger.warn('Gateway', `OTP expiry sweep failed: ${e.message}`); }
+      for (const r of await repo.failUnsentOtps()) {
+        emitOtp(r, 'FAILED');
+        webhooks.dispatch(r.session_id, 'otp.status', { id: r.id, phone: r.phone, status: 'FAILED' });
+      }
+      for (const r of await repo.expireOtps()) emitOtp(r, 'EXPIRED');
+      for (const r of await repo.deleteFailedOtps(failedOtpTtlMin)) emitOtp(r, 'DELETED');
+    } catch (e) { logger.warn('Gateway', `OTP sweep failed: ${e.message}`); }
   }, 30_000).unref();
   setInterval(() => repo.purgeOld().catch((e) => logger.warn('Gateway', `Purge failed: ${e.message}`)), 3_600_000).unref();
 

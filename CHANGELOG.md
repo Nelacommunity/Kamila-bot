@@ -11,6 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Dashboard docs: "Send messages" section with code samples and a Try it box
 - **Sender branding:** set the linked number's WhatsApp display name and logo from the project's WhatsApp tab (`GET/POST /v1/sessions/:id/profile`), with a preview of how OTPs and messages look to recipients
 
+### Changed
+- **Dashboard UI:** today summary and per-type counts on the projects page, cards say what needs doing (e.g. "Scan the QR code to connect"), a "Get started" checklist on each project's Overview, a dot on the WhatsApp tab while disconnected, click-to-copy project ID, friendlier empty states, Playground suggestions, and an OTP message editor with insertable values, validation and a WhatsApp-style preview
+- **Chat widget:** text colour adapts to the brand colour, multi-line input (Enter sends, Shift+Enter for a new line), clickable links in replies, a "new conversation" button, Escape to close, launcher turns into a close button, no overlap on phones, reduced-motion support
+- **Login page:** describes OTP, messages and the AI chatbot; buttons show a spinner while redirecting
+
+### Fixed
+- OTP codes that failed to send no longer show in the dashboard: codes WhatsApp never accepted are marked failed instead of expired (so they aren't counted as sent), and failed codes are deleted 10 minutes after they fail
+
 ## [2.0.0] - 2026-11-10
 
 ### Added

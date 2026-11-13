@@ -126,9 +126,22 @@ export function createRepo({ url, serviceRoleKey }) {
     async listOtps(sessionId, limit) {
       return q(sb.from('gw_otps').select(OTP_PUBLIC_COLS).eq('session_id', sessionId).order('created_at', { ascending: false }).limit(limit));
     },
+    // Codes WhatsApp never accepted (still PENDING with no message id) are
+    // failures, not expiries, so they don't count as sent.
     async expireOtps() {
       return q(sb.from('gw_otps').update({ status: 'EXPIRED', updated_at: new Date().toISOString() })
-        .in('status', ACTIVE_OTP).lt('expires_at', new Date().toISOString()).select('id, session_id'));
+        .in('status', ACTIVE_OTP).or('status.neq.PENDING,message_id.not.is.null')
+        .lt('expires_at', new Date().toISOString()).select('id, session_id'));
+    },
+    async failUnsentOtps(olderThanSec = 120) {
+      return q(sb.from('gw_otps').update({ status: 'FAILED', updated_at: new Date().toISOString() })
+        .eq('status', 'PENDING').is('message_id', null)
+        .lt('created_at', new Date(Date.now() - olderThanSec * 1000).toISOString()).select('id, session_id, phone'));
+    },
+    // Failed codes are removed shortly after they fail, so they don't linger in lists or stats.
+    async deleteFailedOtps(afterMinutes = 10) {
+      return q(sb.from('gw_otps').delete().eq('status', 'FAILED')
+        .lt('updated_at', new Date(Date.now() - afterMinutes * 60000).toISOString()).select('id, session_id'));
     },
     async purgeOld(days = 7, chatDays = 30) {
       const cutoff = new Date(Date.now() - days * 86400000).toISOString();
